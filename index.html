@@ -125,6 +125,22 @@
   <label class="check"><input type="checkbox" id="labels" checked> Stop names</label>
   <label class="check"><input type="checkbox" id="hud" checked> Title, distance and progress bar</label>
 
+  <h2>Music</h2>
+  <label class="check"><input type="checkbox" id="musicOn" checked> Add background music to the video</label>
+  <div class="field"><span>Style</span>
+    <select id="musicStyle">
+      <option value="energetic">Energetic dance (126 BPM)</option>
+      <option value="pop">Upbeat pop (112 BPM)</option>
+      <option value="cinematic">Cinematic drive (100 BPM)</option>
+      <option value="file">My own music file…</option>
+    </select>
+  </div>
+  <input type="file" id="musicFile" accept="audio/*" hidden>
+  <div id="musicFileName" style="display:none;color:var(--muted);font-size:12px;margin:-2px 0 6px"></div>
+  <div class="row"><label for="musicVol">Volume</label><output id="musicVolV"></output>
+    <input type="range" id="musicVol" min="0" max="100" step="5" value="70"></div>
+  <button id="musicTry" type="button" style="padding:5px 12px;font-size:13px">▶ Listen</button>
+
   <h2>Stops</h2>
   <div id="stops"><span style="color:var(--muted);font-size:13px">Load a KML to see its points.</span></div>
 </aside>
@@ -733,6 +749,167 @@ function fitStage() {
 }
 window.addEventListener("resize", fitStage);
 
+// ------------------------------------------------------------------ music
+// A small generative track built with Web Audio: drums, bass, arpeggio and pad on a
+// four-chord loop. It plays to the speakers and into a stream that is mixed into the
+// recording. Original sound, so the videos are free of copyright claims.
+const Music = (() => {
+  const STYLES = {
+    energetic: { bpm: 126, chords: [[57, 60, 64], [53, 57, 60], [55, 60, 64], [55, 59, 62]], bass: [45, 41, 48, 43],
+                 kick: [0, 4, 8, 12], clap: [4, 12], hats: "16th", openHat: [2, 6, 10, 14], bassSteps: [2, 6, 10, 14],
+                 arp: "16th", arpOct: 12, pad: true },
+    pop:       { bpm: 112, chords: [[60, 64, 67], [55, 59, 62], [57, 60, 64], [53, 57, 60]], bass: [48, 43, 45, 41],
+                 kick: [0, 6, 8, 11], clap: [4, 12], hats: "8th", openHat: [14], bassSteps: [0, 3, 6, 8, 11, 14],
+                 arp: "8th", arpOct: 12, pad: false, stabs: [2, 6, 10, 14] },
+    cinematic: { bpm: 100, chords: [[62, 65, 69], [58, 62, 65], [53, 57, 60], [60, 64, 67]], bass: [38, 34, 41, 36],
+                 kick: [0, 8, 10], clap: [12], hats: "8th", openHat: [], bassSteps: [0, 2, 4, 6, 8, 10, 12, 14],
+                 arp: "16th", arpOct: 0, pad: true },
+  };
+  let ac, bus, out, dest, delay, noise, timer = 0, fileBuf = null, fileSrc = null;
+  let st, step, bar, nextT, endT;
+  const hz = m => 440 * 2 ** ((m - 69) / 12);
+
+  function ensure() {
+    if (!ac) {
+      ac = new AudioContext();
+      bus = ac.createGain();                       // instruments -> bus -> compressor -> out
+      const comp = ac.createDynamicsCompressor();
+      comp.threshold.value = -14; comp.ratio.value = 4;
+      out = ac.createGain();
+      bus.connect(comp); comp.connect(out);
+      out.connect(ac.destination);
+      dest = ac.createMediaStreamDestination();
+      out.connect(dest);
+      delay = ac.createDelay(1);                   // dotted-8th echo for the synths
+      const fb = ac.createGain(), tone = ac.createBiquadFilter();
+      fb.gain.value = 0.32; tone.type = "lowpass"; tone.frequency.value = 2500;
+      delay.connect(tone); tone.connect(fb); fb.connect(delay); tone.connect(bus);
+      noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noise.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (ac.state === "suspended") ac.resume();
+    return ac;
+  }
+  const volume = () => (+$("musicVol").value / 100) ** 1.5;
+
+  function env(g, t, peak, a, dcy) {
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + a);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + a + dcy);
+  }
+  function kick(t) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+    env(g, t, 1, 0.003, 0.38); o.connect(g); g.connect(bus); o.start(t); o.stop(t + 0.45);
+  }
+  function noiseHit(t, type, freq, peak, dcy, q = 1) {
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = noise; f.type = type; f.frequency.value = freq; f.Q.value = q;
+    env(g, t, peak, 0.002, dcy); s.connect(f); f.connect(g); g.connect(bus);
+    s.start(t, Math.random() * 0.5); s.stop(t + dcy + 0.05);
+  }
+  const hat = (t, open) => noiseHit(t, "highpass", 8000, open ? 0.16 : 0.1, open ? 0.22 : 0.045);
+  const clap = t => { for (const o of [0, 0.012, 0.024]) noiseHit(t + o, "bandpass", 1600, 0.45, 0.12, 0.8); };
+  function synth(t, midi, dur, { type = "sawtooth", peak = 0.12, cut = 2800, cutEnd = 700, send = 0, detune = 0 } = {}) {
+    const f = ac.createBiquadFilter(), g = ac.createGain();
+    f.type = "lowpass"; f.Q.value = 4;
+    f.frequency.setValueAtTime(cut, t); f.frequency.exponentialRampToValueAtTime(cutEnd, t + dur);
+    env(g, t, peak, 0.005, dur);
+    for (const dt of detune ? [-detune, detune] : [0]) {
+      const o = ac.createOscillator(); o.type = type; o.frequency.value = hz(midi); o.detune.value = dt;
+      o.connect(f); o.start(t); o.stop(t + dur + 0.05);
+    }
+    f.connect(g); g.connect(bus);
+    if (send) { const s = ac.createGain(); s.gain.value = send; g.connect(s); s.connect(delay); }
+  }
+  function pad(t, chord, dur) {
+    for (const m of chord) {
+      const f = ac.createBiquadFilter(), g = ac.createGain();
+      f.type = "lowpass"; f.frequency.value = 1400;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.035, t + dur * 0.3);
+      g.gain.linearRampToValueAtTime(0.0001, t + dur);
+      for (const dt of [-9, 9]) {
+        const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = hz(m); o.detune.value = dt;
+        o.connect(f); o.start(t); o.stop(t + dur + 0.05);
+      }
+      f.connect(g); g.connect(bus);
+    }
+  }
+
+  function playStep(t) {
+    const s16 = 60 / st.bpm / 4, i = step % 16, ci = bar % 4;
+    const chord = st.chords[ci], intro = bar < 1, fill = bar % 8 === 7 && i >= 12;
+    if (!intro && st.kick.includes(i)) kick(t);
+    if (!intro && (st.clap.includes(i) || fill)) clap(t);
+    if (st.hats === "16th" || i % 2 === 0) hat(t, st.openHat.includes(i));
+    if (!intro && st.bassSteps.includes(i))
+      synth(t, st.bass[ci], s16 * 1.6, { peak: 0.3, cut: 900, cutEnd: 200, detune: 6 });
+    if ((st.arp === "16th" || i % 2 === 0) && (!intro || i % 4 === 0)) {
+      const notes = [chord[0], chord[1], chord[2], chord[0] + 12];
+      const n = notes[(i >> (st.arp === "16th" ? 0 : 1)) % 4] + st.arpOct;
+      synth(t, n, s16 * 1.4, { type: "square", peak: 0.05, cut: 4200, cutEnd: 900, send: 0.4 });
+    }
+    if (st.stabs && !intro && st.stabs.includes(i))
+      for (const m of chord) synth(t, m + 12, s16 * 1.2, { peak: 0.045, cut: 3500, cutEnd: 1200, send: 0.25 });
+    if (st.pad && i === 0) pad(t, chord.map(m => m - 12), s16 * 16);
+  }
+  function schedule() {
+    while (nextT < ac.currentTime + 0.15 && nextT < endT) {
+      playStep(nextT);
+      nextT += 60 / st.bpm / 4;
+      if (++step % 16 === 0) bar++;
+    }
+  }
+
+  return {
+    ensure,
+    get stream() { return dest?.stream; },
+    async loadFile(file) {
+      ensure();
+      fileBuf = await ac.decodeAudioData(await file.arrayBuffer());
+      return fileBuf.duration;
+    },
+    hasFile: () => !!fileBuf,
+    // Plays for `seconds`, fading in briefly and out over the last 2.5 s.
+    start(seconds) {
+      this.stop(true);
+      ensure();
+      const t0 = ac.currentTime + 0.05, v = volume();
+      endT = t0 + seconds;
+      out.gain.cancelScheduledValues(0);
+      out.gain.setValueAtTime(0.0001, t0);
+      out.gain.exponentialRampToValueAtTime(v, t0 + 0.4);
+      out.gain.setValueAtTime(v, Math.max(t0 + 0.5, endT - 2.5));
+      out.gain.linearRampToValueAtTime(0.0001, endT);
+      const style = $("musicStyle").value;
+      if (style === "file" && fileBuf) {
+        fileSrc = ac.createBufferSource(); fileSrc.buffer = fileBuf; fileSrc.loop = true;
+        fileSrc.connect(bus); fileSrc.start(t0); fileSrc.stop(endT + 0.1);
+        return;
+      }
+      st = STYLES[style] || STYLES.energetic;
+      step = 0; bar = 0; nextT = t0;
+      schedule();
+      timer = setInterval(schedule, 25);
+    },
+    stop(now = false) {
+      clearInterval(timer); timer = 0;
+      if (!ac) return;
+      const t = ac.currentTime;
+      out.gain.cancelScheduledValues(t);
+      out.gain.setValueAtTime(out.gain.value, t);
+      out.gain.linearRampToValueAtTime(0.0001, t + (now ? 0.02 : 0.3));
+      if (fileSrc) { try { fileSrc.stop(t + 0.35); } catch {} fileSrc = null; }
+      endT = t;
+    },
+    setVolume() { if (ac && timer) out.gain.setTargetAtTime(volume(), ac.currentTime, 0.05); },
+  };
+})();
+
+const musicWanted = () => $("musicOn").checked && ($("musicStyle").value !== "file" || Music.hasFile());
+
 // ------------------------------------------------------------------ playback
 const nextFrame = () => new Promise(r => requestAnimationFrame(r));
 function waitIdle(ms) {
@@ -772,6 +949,8 @@ async function preloadTiles() {
 async function run(record) {
   if (!state.route || state.running) return;
   state.running = true; state.abort = false; setButtons();
+  const withMusic = musicWanted();
+  if (withMusic) Music.ensure();   // must happen inside the click, before any await
   buildProfile();
   const P = state.profile, intro = $("intro").checked;
   const T_INTRO = intro ? 1.5 : 0.5, T_FLY = intro ? 4 : 0, T_OUT = intro ? 3.5 : 0, T_END = 2.5;
@@ -790,7 +969,8 @@ async function run(record) {
     await waitIdle(4000);
     if (state.abort) return;
 
-    if (record) startRecorder();
+    if (record) startRecorder(withMusic);
+    if (withMusic) Music.start(total);
     const t0 = performance.now();
     const tick = () => setStatus(`${record ? "● REC " : "▶ "}${fmt((performance.now() - t0) / 1000)} / ${fmt(total)}`, record);
 
@@ -822,6 +1002,7 @@ async function run(record) {
     }
   } finally {
     map.stop();
+    Music.stop();
     const recorded = !!state.recorder;
     if (recorded) await stopRecorder();
     state.running = false;
@@ -831,16 +1012,20 @@ async function run(record) {
 }
 
 // ------------------------------------------------------------------ recording
-function pickMime() {
-  const c = ["video/mp4;codecs=avc1.640028", "video/mp4;codecs=avc1", "video/mp4",
-             "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+function pickMime(audio) {
+  const c = audio
+    ? ["video/mp4;codecs=avc1.640028,mp4a.40.2", "video/mp4;codecs=avc1,mp4a.40.2", "video/mp4",
+       "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]
+    : ["video/mp4;codecs=avc1.640028", "video/mp4;codecs=avc1", "video/mp4",
+       "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
   return c.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
 }
-function startRecorder() {
-  const fps = +$("fps").value, mime = pickMime();
+function startRecorder(withMusic) {
+  const fps = +$("fps").value, mime = pickMime(withMusic);
   const stream = out.captureStream(fps);
+  if (withMusic && Music.stream) for (const tr of Music.stream.getAudioTracks()) stream.addTrack(tr);
   const rec = new MediaRecorder(stream, { mimeType: mime || undefined,
-    videoBitsPerSecond: Math.round(state.W * state.H * fps * 0.2) });
+    videoBitsPerSecond: Math.round(state.W * state.H * fps * 0.2), audioBitsPerSecond: 192000 });
   const chunks = [];
   rec.ondataavailable = e => e.data.size && chunks.push(e.data);
   rec.done = new Promise(res => rec.onstop = () => res(new Blob(chunks, { type: rec.mimeType || mime || "video/webm" })));
@@ -889,11 +1074,38 @@ function setButtons() {
   $("playBtn").disabled = !has || r;
   $("recBtn").disabled = !has || r || !window.MediaRecorder;
   $("stopBtn").disabled = !r;
-  for (const id of ["res", "fps", "file"]) $(id).disabled = r;
+  for (const id of ["res", "fps", "file", "musicTry"]) $(id).disabled = r;
 }
 $("playBtn").onclick = () => run(false);
 $("recBtn").onclick = () => run(true);
 $("stopBtn").onclick = () => { state.abort = true; };
+
+// Music controls
+let trying = 0;
+function stopTry() { clearTimeout(trying); trying = 0; $("musicTry").textContent = "▶ Listen"; }
+$("musicTry").onclick = () => {
+  if (state.running) return;
+  if (trying) { Music.stop(); stopTry(); return; }
+  if ($("musicStyle").value === "file" && !Music.hasFile()) { $("musicFile").click(); return; }
+  Music.start(12);
+  $("musicTry").textContent = "■ Stop";
+  trying = setTimeout(stopTry, 12000);
+};
+$("musicStyle").addEventListener("change", () => {
+  if (trying) { Music.stop(); stopTry(); }
+  if ($("musicStyle").value === "file" && !Music.hasFile()) $("musicFile").click();
+});
+$("musicFile").onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const secs = await Music.loadFile(f);
+    $("musicFileName").textContent = `${f.name} · ${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, "0")} (loops if shorter than the video)`;
+    $("musicFileName").style.display = "block";
+    $("musicStyle").value = "file";
+  } catch { alert("Could not read that audio file. Try an MP3, M4A or WAV."); }
+};
+$("musicVol").addEventListener("input", () => Music.setVolume());
 
 async function handleFile(file) {
   if (!file || state.running) return;
@@ -907,7 +1119,7 @@ const drop = $("drop");
 document.addEventListener("drop", e => handleFile(e.dataTransfer.files[0]));
 
 const sliders = { duration: v => v + " s", zClose: v => (+v).toFixed(1), zFar: v => (+v).toFixed(1),
-                  slow: v => v + "%", pause: v => v + " s", pitch: v => v + "°" };
+                  slow: v => v + "%", pause: v => v + " s", pitch: v => v + "°", musicVol: v => v + "%" };
 for (const [id, f] of Object.entries(sliders)) {
   const el = $(id), show = () => { $(id + "V").textContent = f(el.value); };
   el.addEventListener("input", () => {

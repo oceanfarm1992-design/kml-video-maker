@@ -22,6 +22,7 @@ Keep the tab visible while recording, since browsers slow down hidden tabs.
 - Overview at the start and end of the route
 - Stop pins and names, arrival pop-ups, distance and progress bar
 - English road names for the roads on the route
+- Background music made in the browser (energetic dance, upbeat pop, cinematic) or your own audio file, recorded into the video
 - Sizes: 1920×1080, 1280×720, 1080×1920 (vertical), 1080×1080
 
 Created by Irshan.
