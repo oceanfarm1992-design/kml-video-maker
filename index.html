@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KML Route Video Maker</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --line: #2a313c; --text: #e6edf3; --muted: #8b949e;
+    --accent: #ffb23e; --rec: #f85149; --ok: #3fb950;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  body { display: flex; overflow: hidden; }
+  aside { width: 320px; flex: none; background: var(--panel); border-right: 1px solid var(--line);
+    overflow-y: auto; padding: 16px; }
+  h1 { font-size: 17px; margin: 0 0 12px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+  .drop { display: block; border: 1.5px dashed var(--line); border-radius: 10px; padding: 18px 12px;
+    text-align: center; color: var(--muted); cursor: pointer; transition: .15s; }
+  .drop:hover, .drop.over { border-color: var(--accent); color: var(--text); }
+  .drop input { display: none; }
+  #info { margin-top: 8px; font-size: 13px; color: var(--muted); }
+  #info b { color: var(--text); }
+  .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 8px; margin: 8px 0; }
+  .row label { color: var(--muted); font-size: 13px; }
+  .row output { font-variant-numeric: tabular-nums; font-size: 13px; }
+  .row input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+  input[type=text], select { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 8px; font: inherit; }
+  .field { margin: 8px 0; }
+  .field > span { display: block; color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+  .check { display: flex; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; cursor: pointer; }
+  .check input { accent-color: var(--accent); }
+  input[type=color] { width: 44px; height: 28px; border: 1px solid var(--line); background: none; border-radius: 6px; padding: 2px; }
+  .stop { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; align-items: center; margin: 4px 0; }
+  .stop input[type=text] { padding: 4px 6px; }
+  .stop small { color: var(--muted); font-variant-numeric: tabular-nums; }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  button { background: #21262d; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .45; cursor: default; }
+  #recBtn { background: var(--rec); border-color: var(--rec); color: #fff; }
+  #status { color: var(--muted); font-size: 13px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  #status.live { color: var(--rec); font-weight: 600; }
+  #stageWrap { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 14px; }
+  #stageBox { position: relative; overflow: hidden; border-radius: 6px; box-shadow: 0 8px 40px #0008; background: #0b1a2a; }
+  #stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #map, #out { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 16px; pointer-events: none; text-align: center; padding: 20px; }
+  #result { display: none; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); overflow-x: auto; flex: none; }
+  #result.show { display: flex; }
+  .clip { flex: none; display: flex; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px 6px 6px; }
+  .clip video { height: 72px; border-radius: 5px; background: #000; }
+  .clip div { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); max-width: 230px; }
+  .clip b { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .clip a { align-self: flex-start; background: var(--ok); color: #04130a; font-weight: 700; padding: 4px 10px; border-radius: 6px; text-decoration: none; }
+  .clip.saved a { background: #21262d; color: var(--text); border: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<aside>
+  <h1>KML Route Video Maker</h1>
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept=".kml,.kmz">
+    Drop a <b>.kml</b> or <b>.kmz</b> file here<br>or click to choose
+  </label>
+  <div id="info"></div>
+
+  <h2>Video</h2>
+  <div class="field"><span>Title</span><input type="text" id="title"></div>
+  <div class="field"><span>Size</span>
+    <select id="res">
+      <option value="1920x1080">1920 × 1080 (Full HD, landscape)</option>
+      <option value="1280x720">1280 × 720 (HD, landscape)</option>
+      <option value="1080x1920">1080 × 1920 (vertical, Reels/TikTok)</option>
+      <option value="1080x1080">1080 × 1080 (square)</option>
+    </select>
+  </div>
+  <div class="field"><span>Frame rate</span>
+    <select id="fps"><option value="30">30 fps</option><option value="60">60 fps</option></select>
+  </div>
+  <div class="field"><span>Map</span>
+    <select id="basemap">
+      <option value="satellite">Satellite (Esri)</option>
+      <option value="streets">Streets (Esri)</option>
+      <option value="dark">Dark (CARTO)</option>
+    </select>
+  </div>
+  <label class="check"><input type="checkbox" id="placeLabels" checked> Place names on satellite</label>
+  <div class="field"><span>Road names (English)</span>
+    <select id="roadNames">
+      <option value="route">Only roads on the route</option>
+      <option value="all">All roads</option>
+      <option value="off">Off</option>
+    </select>
+  </div>
+
+  <h2>Camera &amp; motion</h2>
+  <div class="row"><label for="duration">Route travel time</label><output id="durationV"></output>
+    <input type="range" id="duration" min="10" max="240" step="1" value="40"></div>
+  <div class="row"><label for="zClose">Zoom at stops &amp; turns</label><output id="zCloseV"></output>
+    <input type="range" id="zClose" min="8" max="18" step="0.1" value="15"></div>
+  <div class="row"><label for="zFar">Zoom on open stretches</label><output id="zFarV"></output>
+    <input type="range" id="zFar" min="4" max="17" step="0.1" value="12"></div>
+  <div class="row"><label for="slow">Slow down at stops &amp; turns</label><output id="slowV"></output>
+    <input type="range" id="slow" min="0" max="90" step="5" value="65"></div>
+  <div class="row"><label for="pause">Pause at each stop</label><output id="pauseV"></output>
+    <input type="range" id="pause" min="0" max="5" step="0.5" value="1"></div>
+  <div class="row"><label for="pitch">Camera tilt</label><output id="pitchV"></output>
+    <input type="range" id="pitch" min="0" max="70" step="1" value="55"></div>
+  <label class="check"><input type="checkbox" id="rotate" checked> Turn camera with the route</label>
+  <label class="check"><input type="checkbox" id="intro" checked> Start and end on the full-route overview</label>
+
+  <h2>Overlay</h2>
+  <div class="field" style="display:flex;align-items:center;gap:10px"><input type="color" id="color" value="#ffb23e"><span style="margin:0">Route colour</span></div>
+  <label class="check"><input type="checkbox" id="labels" checked> Stop names</label>
+  <label class="check"><input type="checkbox" id="hud" checked> Title, distance and progress bar</label>
+
+  <h2>Stops</h2>
+  <div id="stops"><span style="color:var(--muted);font-size:13px">Load a KML to see its points.</span></div>
+</aside>
+
+<main>
+  <div id="toolbar">
+    <button id="playBtn" disabled>▶ Preview</button>
+    <button id="recBtn" disabled>● Record video</button>
+    <button id="stopBtn" disabled>■ Stop</button>
+    <label class="check" title="Flies the camera path once before recording so map tiles are sharp in the video">
+      <input type="checkbox" id="preload" checked> Pre-load map tiles before recording</label>
+    <label class="check" title="Saves each finished recording straight to your Downloads folder">
+      <input type="checkbox" id="autosave" checked> Auto-save to Downloads</label>
+    <span id="status">No route loaded</span>
+  </div>
+  <div id="stageWrap">
+    <div id="stageBox">
+      <div id="stage"><div id="map"></div><canvas id="out"></canvas></div>
+      <div id="empty">Load a KML file to start</div>
+    </div>
+  </div>
+  <div id="result"></div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+// ------------------------------------------------------------------ constants
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/";
+const BASEMAPS = {
+  satellite: { tiles: [ESRI + "World_Imagery/MapServer/tile/{z}/{y}/{x}"], attr: "Imagery © Esri, Maxar, Earthstar Geographics" },
+  streets:   { tiles: [ESRI + "World_Street_Map/MapServer/tile/{z}/{y}/{x}"], attr: "Map © Esri" },
+  dark:      { tiles: ["a", "b", "c", "d"].map(s => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png`),
+               attr: "© OpenStreetMap contributors © CARTO" },
+};
+const ROAD_TILES = "https://tiles.openfreemap.org/planet";   // OpenStreetMap vector tiles, no key
+const ROAD_ATTR = "Roads © OpenStreetMap contributors, OpenFreeMap";
+const LABEL_TILES = [ESRI + "Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"];
+const PLUSCODE = /^[23456789CFGHJMPQRVWX]{4,8}\+[23456789CFGHJMPQRVWX]{2,}/i;
+const D2R = Math.PI / 180, EARTH_R = 6371008.8, EARTH_C = 40075016.686;
+
+// ------------------------------------------------------------------ state
+const state = {
+  W: 1920, H: 1080,
+  route: null,        // {coords, cum, length}
+  stops: [],          // {name, lon, lat, s, off, on}
+  docName: "",
+  profile: null,
+  curS: 0, bearing: 0, phase: "idle",
+  arrival: null,      // {name, t}
+  running: false, abort: false,
+  recorder: null,
+};
+
+// ------------------------------------------------------------------ geo helpers
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function dist(a, b) {
+  const dLat = (b[1] - a[1]) * D2R, dLon = (b[0] - a[0]) * D2R;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * D2R) * Math.cos(b[1] * D2R) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+function brg(a, b) {
+  const p1 = a[1] * D2R, p2 = b[1] * D2R, dl = (b[0] - a[0]) * D2R;
+  const y = Math.sin(dl) * Math.cos(p2), x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (Math.atan2(y, x) / D2R + 360) % 360;
+}
+const angDiff = (a, b) => ((b - a + 540) % 360) - 180;
+const metersPerPixel = (z, lat) => EARTH_C * Math.cos(lat * D2R) / (512 * 2 ** z);
+const mercX = lon => (lon + 180) / 360;
+const mercY = lat => (1 - Math.log(Math.tan(Math.PI / 4 + lat * D2R / 2)) / Math.PI) / 2;
+const unMercY = y => (2 * Math.atan(Math.exp(Math.PI * (1 - 2 * y))) - Math.PI / 2) / D2R;
+
+function buildRoute(coords) {
+  const c = [coords[0]];
+  for (let i = 1; i < coords.length; i++) if (dist(c[c.length - 1], coords[i]) > 0.5) c.push(coords[i]);
+  const cum = [0];
+  for (let i = 1; i < c.length; i++) cum.push(cum[i - 1] + dist(c[i - 1], c[i]));
+  return { coords: c, cum, length: cum[cum.length - 1] };
+}
+function segIndex(r, s) {
+  let lo = 0, hi = r.cum.length - 2;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (r.cum[m] <= s) lo = m; else hi = m - 1; }
+  return lo;
+}
+function pointAt(s) {
+  const r = state.route; s = clamp(s, 0, r.length);
+  const i = segIndex(r, s), a = r.coords[i], b = r.coords[i + 1];
+  const seg = r.cum[i + 1] - r.cum[i], t = seg > 0 ? (s - r.cum[i]) / seg : 0;
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+}
+function projectOnRoute(r, p) {
+  let best = { s: 0, off: Infinity };
+  const kx = Math.cos(p[1] * D2R) * 111320, ky = 110540;
+  for (let i = 0; i < r.coords.length - 1; i++) {
+    const a = r.coords[i], b = r.coords[i + 1];
+    const ax = (a[0] - p[0]) * kx, ay = (a[1] - p[1]) * ky, bx = (b[0] - p[0]) * kx, by = (b[1] - p[1]) * ky;
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    const t = l2 > 0 ? clamp(-(ax * dx + ay * dy) / l2, 0, 1) : 0;
+    const d = Math.hypot(ax + dx * t, ay + dy * t);
+    if (d < best.off) best = { s: r.cum[i] + (r.cum[i + 1] - r.cum[i]) * t, off: d };
+  }
+  return best;
+}
+
+// ------------------------------------------------------------------ KML parsing
+function parseKml(text) {
+  const xml = new DOMParser().parseFromString(text, "text/xml");
+  if (xml.getElementsByTagName("parsererror").length) throw new Error("This file is not valid KML.");
+  const byTag = (el, t) => Array.from(el.getElementsByTagNameNS("*", t));
+  const childText = (el, t) => { for (const c of el.children) if (c.localName === t) return c.textContent.trim(); return ""; };
+  const toPts = arr => arr.filter(a => a.length >= 2 && isFinite(a[0]) && isFinite(a[1])).map(a => [a[0], a[1]]);
+  const parseCoords = t => toPts(t.trim().split(/\s+/).map(s => s.split(",").map(Number)));
+  const docEl = byTag(xml, "Document")[0] || byTag(xml, "Folder")[0];
+  const out = { docName: docEl ? childText(docEl, "name") : "", lines: [], points: [] };
+  for (const pm of byTag(xml, "Placemark")) {
+    const name = childText(pm, "name");
+    for (const ls of byTag(pm, "LineString")) {
+      const c = byTag(ls, "coordinates")[0];
+      const pts = c ? parseCoords(c.textContent) : [];
+      if (pts.length > 1) out.lines.push({ name, pts });
+    }
+    for (const tr of byTag(pm, "Track")) {   // gx:Track
+      const pts = toPts(byTag(tr, "coord").map(e => e.textContent.trim().split(/\s+/).map(Number)));
+      if (pts.length > 1) out.lines.push({ name, pts });
+    }
+    for (const pt of byTag(pm, "Point")) {
+      const c = byTag(pt, "coordinates")[0];
+      const pts = c ? parseCoords(c.textContent) : [];
+      if (pts.length) out.points.push({ name: name || "Stop", lon: pts[0][0], lat: pts[0][1] });
+    }
+  }
+  return out;
+}
+
+async function readFile(file) {
+  if (/\.kmz$/i.test(file.name)) {
+    const zip = await JSZip.loadAsync(file);
+    const entry = Object.values(zip.files).find(f => /\.kml$/i.test(f.name));
+    if (!entry) throw new Error("No .kml file found inside the .kmz.");
+    return entry.async("string");
+  }
+  return file.text();
+}
+
+function loadKml(text, fileName) {
+  const k = parseKml(text);
+  let coords;
+  if (k.lines.length) {
+    const lens = k.lines.map(l => buildRoute(l.pts).length);
+    coords = k.lines[lens.indexOf(Math.max(...lens))].pts;
+  } else if (k.points.length >= 2) {
+    coords = k.points.map(p => [p.lon, p.lat]);
+  } else {
+    throw new Error("The KML needs a line (route) or at least two points.");
+  }
+  const r = buildRoute(coords);
+  if (r.coords.length < 2 || r.length < 10) throw new Error("The route is too short to animate.");
+  state.route = r;
+  state.docName = k.docName || fileName.replace(/\.(kml|kmz)$/i, "");
+
+  // Stops: project onto the route, merge near-duplicates (prefer a real name over a plus code).
+  const stops = [];
+  for (const p of k.points) {
+    const pr = projectOnRoute(r, [p.lon, p.lat]);
+    const st = { name: p.name, lon: p.lon, lat: p.lat, s: pr.s, off: pr.off, on: true };
+    const dup = stops.find(o => dist([o.lon, o.lat], [st.lon, st.lat]) < 50);
+    if (dup) { if (PLUSCODE.test(dup.name) && !PLUSCODE.test(st.name)) dup.name = st.name; continue; }
+    stops.push(st);
+  }
+  stops.sort((a, b) => a.s - b.s);
+  state.stops = stops;
+
+  // Sensible zoom defaults for this route length and output size.
+  const lat = pointAt(r.length / 2)[1];
+  const zFar = clamp(Math.log2(EARTH_C * Math.cos(lat * D2R) * state.W / (512 * clamp(r.length / 4, 800, 400000))), 4, 16);
+  $("zFar").value = zFar.toFixed(1);
+  $("zClose").value = Math.min(zFar + 3, 17.5).toFixed(1);
+  $("title").value = state.docName;
+  syncSliderText();
+
+  $("info").innerHTML = `<b>${esc(state.docName)}</b><br>Route ${(r.length / 1000).toFixed(1)} km · ${r.coords.length} points · ${stops.length} stops`;
+  $("empty").style.display = "none";
+  buildRouteCells();
+  renderStopList();
+  syncLabels();
+  updateRouteSources();
+  state.curS = 0; state.phase = "idle"; state.arrival = null;
+  map.jumpTo(overviewCam());
+  setButtons();
+  setStatus("Ready — press Preview or Record");
+}
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function renderStopList() {
+  const box = $("stops");
+  box.innerHTML = "";
+  if (!state.stops.length) { box.innerHTML = '<span style="color:var(--muted);font-size:13px">No points in this KML.</span>'; return; }
+  state.stops.forEach(st => {
+    const row = document.createElement("div");
+    row.className = "stop";
+    row.title = st.off > 300 ? `${Math.round(st.off)} m from the route line` : "";
+    row.innerHTML = `<input type="checkbox" ${st.on ? "checked" : ""}><input type="text"><small>${(st.s / 1000).toFixed(1)} km</small>`;
+    const [cb, name] = row.querySelectorAll("input");
+    name.value = st.name;
+    cb.onchange = () => { st.on = cb.checked; map.triggerRepaint(); };
+    name.oninput = () => { st.name = name.value; map.triggerRepaint(); };
+    box.appendChild(row);
+  });
+}
+const activeStops = () => state.stops.filter(s => s.on);
+
+// ------------------------------------------------------------------ motion profile
+// "attention" k(s) in [0,1]: high near stops, route ends and sharp turns.
+// Camera zoom goes from zFar (k=0) to zClose (k=1); speed drops by `slow` as k rises.
+function buildProfile() {
+  const r = state.route, L = r.length;
+  const N = Math.min(5000, Math.max(300, Math.ceil(L / 8)));
+  const ds = L / (N - 1);
+  const stops = activeStops();
+  const Rk = Math.max(200, L * 0.012);
+  const w = Math.max(120, L * 0.004);
+  const anchors = [0, L, ...stops.map(s => s.s)];
+  let k = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const s = i * ds;
+    let g = 0;
+    for (const a of anchors) g = Math.max(g, Math.exp(-(((s - a) / Rk) ** 2)));
+    let c = 0;
+    if (s - w >= 0 && s + w <= L) {
+      const p0 = pointAt(s - w), p1 = pointAt(s), p2 = pointAt(s + w);
+      if (dist(p0, p1) > 1 && dist(p1, p2) > 1) c = Math.min(1, Math.abs(angDiff(brg(p0, p1), brg(p1, p2))) / 90);
+    }
+    k[i] = Math.max(g, c * 0.85);
+  }
+  const rad = Math.max(1, Math.round((L * 0.012) / ds));
+  for (let pass = 0; pass < 3; pass++) {   // box blur x3 ~ gaussian
+    const o = new Float32Array(N);
+    let acc = 0, cnt = 0;
+    for (let i = -rad; i < N + rad; i++) {
+      const add = i + rad, rem = i - rad - 1;
+      if (add < N) { acc += k[add]; cnt++; }
+      if (rem >= 0) { acc -= k[rem]; cnt--; }
+      if (i >= 0 && i < N) o[i] = acc / cnt;
+    }
+    k = o;
+  }
+  let kmax = 0; for (const v of k) kmax = Math.max(kmax, v);
+  if (kmax > 0) for (let i = 0; i < N; i++) k[i] /= kmax;
+
+  const slow = +$("slow").value / 100, pause = +$("pause").value, duration = +$("duration").value;
+  const pauseStops = stops.filter(s => s.s > ds && s.s < L - ds);
+  const travel = Math.max(duration * 0.3, duration - pause * pauseStops.length);
+  const speed = i => 1 - slow * k[i];
+  let sumW = 0;
+  for (let i = 1; i < N; i++) sumW += ds / ((speed(i - 1) + speed(i)) / 2);
+  const scale = travel / sumW;
+
+  const T = [0], S = [0], stopTimes = [];
+  let t = 0, si = 0;
+  for (let i = 1; i < N; i++) {
+    const s0 = (i - 1) * ds, s1 = i * ds, dt = ds / ((speed(i - 1) + speed(i)) / 2) * scale;
+    while (si < pauseStops.length && pauseStops[si].s <= s1) {
+      const tc = t + dt * (pauseStops[si].s - s0) / ds;
+      T.push(tc, tc + pause); S.push(pauseStops[si].s, pauseStops[si].s);
+      t += pause; si++;
+    }
+    t += dt; T.push(t); S.push(s1);
+  }
+  state.profile = { N, ds, k, T, S, total: t };
+}
+function sAtTime(t) {
+  const { T, S } = state.profile;
+  if (t <= 0) return 0;
+  if (t >= T[T.length - 1]) return S[S.length - 1];
+  let lo = 0, hi = T.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (T[m] <= t) lo = m; else hi = m; }
+  const span = T[hi] - T[lo];
+  return span > 0 ? S[lo] + (S[hi] - S[lo]) * (t - T[lo]) / span : S[hi];
+}
+function zoomAtS(s) {
+  const { k, ds, N } = state.profile;
+  const x = clamp(s / ds, 0, N - 1), i = Math.min(N - 2, Math.floor(x)), f = x - i;
+  const kk = k[i] + (k[i + 1] - k[i]) * f;
+  const zFar = +$("zFar").value, zClose = Math.max(+$("zClose").value, zFar);
+  return zFar + (zClose - zFar) * kk;
+}
+
+// ------------------------------------------------------------------ cameras
+function overviewCam() {
+  const pts = state.route.coords.concat(activeStops().map(s => [s.lon, s.lat]));
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const p of pts) {
+    const x = mercX(p[0]), y = mercY(p[1]);
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  const { W, H } = state;
+  const availW = W * 0.84, availH = H * 0.62;
+  const z = Math.log2(Math.min(availW / Math.max((x1 - x0) * 512, 1e-9), availH / Math.max((y1 - y0) * 512, 1e-9)));
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  return { center: [cx * 360 - 180, unMercY(cy)], zoom: clamp(z, 1, 16), pitch: 0, bearing: 0,
+           padding: { top: 0, bottom: 0, left: 0, right: 0 } };
+}
+function followCam(s, dt, snap) {
+  const p = pointAt(s), z = zoomAtS(s), L = state.route.length;
+  if ($("rotate").checked) {
+    const look = state.W * metersPerPixel(z, p[1]) * 0.3;
+    const a = pointAt(Math.max(0, s - look * 0.15)), c = pointAt(Math.min(L, s + look));
+    const target = dist(a, c) > 1 ? brg(a, c) : state.bearing;
+    state.bearing = snap ? target : (state.bearing + angDiff(state.bearing, target) * (1 - Math.exp(-dt / 0.8)) + 360) % 360;
+  } else state.bearing = 0;
+  const pitch = +$("pitch").value;
+  return { center: p, zoom: z, bearing: state.bearing, pitch,
+           padding: { top: state.H * 0.3 * (pitch / 70), bottom: 0, left: 0, right: 0 } };
+}
+
+// ------------------------------------------------------------------ map
+const map = new maplibregl.Map({
+  container: "map",
+  style: {
+    version: 8,
+    glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+    sources: Object.fromEntries([
+      ...Object.entries(BASEMAPS).map(([id, b]) => [id, { type: "raster", tiles: b.tiles, tileSize: 256, maxzoom: 19 }]),
+      ["labels", { type: "raster", tiles: LABEL_TILES, tileSize: 256, maxzoom: 19 }],
+      ["osm", { type: "vector", url: ROAD_TILES }],
+      ["route", { type: "geojson", data: emptyLine() }],
+      ["done", { type: "geojson", data: emptyLine() }],
+    ]),
+    layers: [
+      { id: "bg", type: "background", paint: { "background-color": "#0b1a2a" } },
+      ...Object.keys(BASEMAPS).map(id => ({ id, type: "raster", source: id, layout: { visibility: id === "satellite" ? "visible" : "none" } })),
+      { id: "labels", type: "raster", source: "labels", layout: { visibility: "visible" } },
+      { id: "road-names", type: "symbol", source: "osm", "source-layer": "transportation_name", minzoom: 10,
+        filter: ["all", ["!=", ["get", "class"], "ferry"], ["has", "name:en"]],
+        layout: {
+          "symbol-placement": "line", "symbol-spacing": 900, "text-max-angle": 30,
+          // English only: the OSM name:en tag, never the local-script name.
+          "text-field": ["get", "name:en"],
+          "text-font": ["Noto Sans Bold"], "text-size": 16, "text-padding": 4,
+          "text-pitch-alignment": "viewport", "text-rotation-alignment": "map",
+        },
+        paint: { "text-color": "#ffffff", "text-halo-color": "rgba(0,0,0,.85)", "text-halo-width": 2, "text-halo-blur": 0.5 } },
+      { id: "route-casing", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": "#000", "line-opacity": 0.35, "line-width": 6 } },
+      { id: "route-ahead", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": "#ffffff", "line-opacity": 0.7, "line-width": 2.5, "line-dasharray": [2, 2] } },
+      { id: "done-glow", type: "line", source: "done", layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": "#ffb23e", "line-opacity": 0.45, "line-width": 16, "line-blur": 8 } },
+      { id: "done-line", type: "line", source: "done", layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": "#ffb23e", "line-width": 6 } },
+    ],
+  },
+  interactive: false,
+  attributionControl: false,
+  preserveDrawingBuffer: true,
+  pixelRatio: 1,
+  fadeDuration: 0,
+  maxPitch: 70,
+  center: [54.4, 24.3], zoom: 8,
+});
+function emptyLine() { return { type: "Feature", geometry: { type: "LineString", coordinates: [] }, properties: {} }; }
+
+function updateRouteSources() {
+  if (!map.isStyleLoaded() || !state.route) return;
+  map.getSource("route").setData({ ...emptyLine(), geometry: { type: "LineString", coordinates: state.route.coords } });
+  setDone(state.curS);
+}
+let lastDoneS = -1;
+function setDone(s) {
+  if (s === lastDoneS || !state.route) return;
+  lastDoneS = s;
+  const r = state.route, i = segIndex(r, s);
+  const coords = s <= 0 ? [] : r.coords.slice(0, i + 1).concat([pointAt(s)]);
+  map.getSource("done").setData({ ...emptyLine(), geometry: { type: "LineString", coordinates: coords } });
+}
+function syncLabels() {
+  if (!map.isStyleLoaded()) return;
+  const bm = $("basemap").value;
+  for (const id of Object.keys(BASEMAPS)) map.setLayoutProperty(id, "visibility", id === bm ? "visible" : "none");
+  map.setLayoutProperty("labels", "visibility", bm === "satellite" && $("placeLabels").checked ? "visible" : "none");
+  map.setLayoutProperty("road-names", "visibility", $("roadNames").value === "off" ? "none" : "visible");
+  applyRoadFilter();
+  scanRoadNames();
+  // Readable at any output size: 16 px at 720p, scaled up for 1080p.
+  const u = Math.min(state.W, state.H) / 720;
+  map.setLayoutProperty("road-names", "text-size", ["interpolate", ["linear"], ["zoom"], 10, 12 * u, 14, 16 * u, 17, 19 * u]);
+  map.setPaintProperty("road-names", "text-halo-width", 2 * u);
+  const col = $("color").value;
+  map.setPaintProperty("done-line", "line-color", col);
+  map.setPaintProperty("done-glow", "line-color", col);
+  map.triggerRepaint();
+}
+
+// ------------------------------------------------------------------ road names on the route only
+// The route is rasterised into a ~20 m grid. A road counts as "on the route" when at least
+// 150 m of it lies inside that corridor, so roads that merely cross the route are left out.
+const CELL = 0.0002, MIN_OVERLAP_M = 150;
+const routeCells = new Set(), routeRoadNames = new Set();
+const cellKey = (x, y) => x + "," + y;
+function buildRouteCells() {
+  routeCells.clear(); routeRoadNames.clear();
+  const L = state.route.length;
+  for (let s = 0; s <= L + 10; s += 10) {
+    const p = pointAt(s), cx = Math.floor(p[0] / CELL), cy = Math.floor(p[1] / CELL);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) routeCells.add(cellKey(cx + dx, cy + dy));
+  }
+  applyRoadFilter();
+}
+const onRoute = p => routeCells.has(cellKey(Math.floor(p[0] / CELL), Math.floor(p[1] / CELL)));
+function roadOverlap(geom) {
+  const lines = geom.type === "LineString" ? [geom.coordinates] : geom.type === "MultiLineString" ? geom.coordinates : [];
+  let m = 0;
+  for (const line of lines) for (let i = 0; i < line.length - 1; i++) {
+    const a = line[i], b = line[i + 1], d = dist(a, b), n = Math.max(1, Math.ceil(d / 10));
+    for (let k = 0; k < n; k++) {
+      const t = (k + 0.5) / n;
+      if (onRoute([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])) m += d / n;
+    }
+    if (m >= MIN_OVERLAP_M) return m;
+  }
+  return m;
+}
+function scanRoadNames() {
+  if (!state.route || !map.isStyleLoaded() || $("roadNames").value !== "route") return;
+  let added = false;
+  for (const f of map.querySourceFeatures("osm", { sourceLayer: "transportation_name" })) {
+    const name = f.properties["name:en"];
+    if (!name || routeRoadNames.has(name)) continue;
+    if (roadOverlap(f.geometry) >= MIN_OVERLAP_M) { routeRoadNames.add(name); added = true; }
+  }
+  if (added) applyRoadFilter();
+}
+function applyRoadFilter() {
+  if (!map.isStyleLoaded()) return;
+  const base = ["all", ["!=", ["get", "class"], "ferry"], ["has", "name:en"]];
+  map.setFilter("road-names", $("roadNames").value === "route"
+    ? [...base, ["in", ["get", "name:en"], ["literal", [...routeRoadNames]]]]
+    : base);
+}
+// New road tiles arrive as the camera moves; check them (debounced).
+let scanTimer = 0;
+map.on("sourcedata", e => {
+  if (e.sourceId !== "osm" || !e.tile) return;
+  clearTimeout(scanTimer);
+  scanTimer = setTimeout(scanRoadNames, 150);
+});
+
+// ------------------------------------------------------------------ compositing (map + overlay -> recorded canvas)
+const out = $("out"), ctx = out.getContext("2d");
+map.on("render", composite);
+
+function composite() {
+  const { W, H } = state;
+  // The tilted map leaves the sky transparent: paint it every frame, otherwise
+  // labels from earlier frames pile up along the horizon.
+  const sky = ctx.createLinearGradient(0, 0, 0, H * 0.5);
+  sky.addColorStop(0, "#6f9cc4"); sky.addColorStop(1, "#d7e3ec");
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(map.getCanvas(), 0, 0, W, H);
+  if (state.route) drawOverlay(performance.now());
+}
+
+// Screen position of a lon/lat, or null when it is off screen or beyond the horizon
+// (points past the horizon do not survive a project -> unproject round trip).
+function screenPos(ll, margin = 50) {
+  const p = map.project(ll), { W, H } = state;
+  if (!isFinite(p.x) || !isFinite(p.y) || p.x < -margin || p.y < -margin || p.x > W + margin || p.y > H + margin) return null;
+  const back = map.unproject(p);
+  return dist([back.lng, back.lat], ll) > 25 ? null : p;
+}
+function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function pill(text, x, y, u, align = "left") {
+  ctx.font = `600 ${15 * u}px "Segoe UI", system-ui, sans-serif`;
+  const tw = ctx.measureText(text).width, pw = tw + 16 * u, ph = 26 * u;
+  const px = align === "left" ? x : x - pw / 2;
+  ctx.fillStyle = "rgba(10,14,20,.78)"; roundRect(px, y - ph / 2, pw, ph, ph / 2); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  ctx.fillText(text, px + 8 * u, y + 1 * u);
+}
+
+function drawOverlay(now) {
+  const { W, H } = state, u = Math.min(W, H) / 720, col = $("color").value;
+  const s = state.curS, L = state.route.length, stops = activeStops();
+
+  // Stops
+  for (const st of stops) {
+    const p = screenPos([st.lon, st.lat]);
+    if (!p) continue;
+    const passed = s >= st.s - 1;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 9 * u, 0, Math.PI * 2);
+    ctx.fillStyle = passed ? col : "#fff"; ctx.fill();
+    ctx.lineWidth = 3 * u; ctx.strokeStyle = "rgba(10,14,20,.9)"; ctx.stroke();
+    ctx.beginPath(); ctx.arc(p.x, p.y, 3 * u, 0, Math.PI * 2); ctx.fillStyle = "rgba(10,14,20,.9)"; ctx.fill();
+    // Skip the small label while the big arrival card shows the same name.
+    const announcing = state.arrival && state.arrival.name === st.name &&
+      (now - state.arrival.t) / 1000 < +$("pause").value + 1.8;
+    if ($("labels").checked && st.name && !announcing) pill(st.name, p.x + 14 * u, p.y, u);
+  }
+
+  // Moving marker
+  const mp = map.project(pointAt(s));
+  const pulse = ((now / 1000) % 1.3) / 1.3;
+  ctx.beginPath(); ctx.arc(mp.x, mp.y, (11 + 26 * pulse) * u, 0, Math.PI * 2);
+  ctx.fillStyle = hexA(col, 0.45 * (1 - pulse)); ctx.fill();
+  ctx.beginPath(); ctx.arc(mp.x, mp.y, 11 * u, 0, Math.PI * 2);
+  ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 4 * u; ctx.strokeStyle = "#fff"; ctx.stroke();
+
+  // Arrival callout
+  if (state.arrival) {
+    const age = (now - state.arrival.t) / 1000, life = +$("pause").value + 1.8;
+    if (age < life) {
+      const a = Math.min(1, age / 0.25, (life - age) / 0.4);
+      ctx.globalAlpha = a;
+      ctx.font = `700 ${26 * u}px "Segoe UI", system-ui, sans-serif`;
+      const t = state.arrival.name, tw = ctx.measureText(t).width;
+      const bw = tw + 60 * u, bh = 52 * u, bx = (W - bw) / 2, by = H * 0.16 - 12 * u * (1 - a);
+      ctx.fillStyle = "rgba(10,14,20,.82)"; roundRect(bx, by, bw, bh, 12 * u); ctx.fill();
+      ctx.fillStyle = col; roundRect(bx, by, 8 * u, bh, [12 * u, 0, 0, 12 * u]); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.textBaseline = "middle"; ctx.textAlign = "center";
+      ctx.fillText(t, W / 2 + 4 * u, by + bh / 2 + 1 * u);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // HUD
+  if ($("hud").checked) {
+    const m = 24 * u;
+    // title card
+    const title = $("title").value.trim();
+    if (title) {
+      ctx.font = `700 ${24 * u}px "Segoe UI", system-ui, sans-serif`;
+      const tw = ctx.measureText(title).width;
+      const sub = `${(L / 1000).toFixed(1)} km route · ${stops.length} stop${stops.length === 1 ? "" : "s"}`;
+      ctx.font = `500 ${14 * u}px "Segoe UI", system-ui, sans-serif`;
+      const sw = ctx.measureText(sub).width;
+      const bw = Math.max(tw, sw) + 36 * u, bh = 70 * u;
+      ctx.fillStyle = "rgba(10,14,20,.78)"; roundRect(m, m, bw, bh, 12 * u); ctx.fill();
+      ctx.fillStyle = col; roundRect(m, m, 6 * u, bh, [12 * u, 0, 0, 12 * u]); ctx.fill();
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = "#fff"; ctx.font = `700 ${24 * u}px "Segoe UI", system-ui, sans-serif`;
+      ctx.fillText(title, m + 20 * u, m + 32 * u);
+      ctx.fillStyle = "rgba(255,255,255,.72)"; ctx.font = `500 ${14 * u}px "Segoe UI", system-ui, sans-serif`;
+      ctx.fillText(sub, m + 20 * u, m + 55 * u);
+    }
+    // bottom bar
+    const bh = 60 * u, bw = Math.min(W - 2 * m, 900 * u), bx = (W - bw) / 2, by = H - m - bh - 10 * u;
+    ctx.fillStyle = "rgba(10,14,20,.78)"; roundRect(bx, by, bw, bh, 12 * u); ctx.fill();
+    const next = stops.find(st => st.s > s + 1);
+    const label = s >= L - 1 ? "Arrived" + (stops.length ? ": " + stops[stops.length - 1].name : "")
+                : next ? "Next: " + next.name : "En route";
+    ctx.textBaseline = "middle"; ctx.textAlign = "left"; ctx.fillStyle = "#fff";
+    ctx.font = `600 ${17 * u}px "Segoe UI", system-ui, sans-serif`;
+    ctx.fillText(label, bx + 18 * u, by + 24 * u, bw * 0.62);
+    ctx.textAlign = "right"; ctx.font = `700 ${17 * u}px "Segoe UI", system-ui, sans-serif`;
+    ctx.fillText(`${(s / 1000).toFixed(1)} / ${(L / 1000).toFixed(1)} km`, bx + bw - 18 * u, by + 24 * u);
+    const px = bx + 18 * u, pw = bw - 36 * u, py = by + 44 * u;
+    ctx.fillStyle = "rgba(255,255,255,.18)"; roundRect(px, py, pw, 5 * u, 3 * u); ctx.fill();
+    ctx.fillStyle = col; roundRect(px, py, Math.max(5 * u, pw * s / L), 5 * u, 3 * u); ctx.fill();
+    for (const st of stops) {
+      ctx.beginPath(); ctx.arc(px + pw * st.s / L, py + 2.5 * u, 4 * u, 0, Math.PI * 2);
+      ctx.fillStyle = s >= st.s - 1 ? col : "rgba(255,255,255,.6)"; ctx.fill();
+    }
+  }
+
+  // Credit — always on, every video. Small, in the very bottom-right corner (below the progress bar).
+  const credit = "Created by Irshan";
+  ctx.font = `600 ${11 * u}px "Segoe UI", system-ui, sans-serif`;
+  const cw = ctx.measureText(credit).width + 16 * u, chh = 19 * u, cx = W - 8 * u - cw, cy = H - 7 * u - chh;
+  ctx.fillStyle = "rgba(10,14,20,.7)"; roundRect(cx, cy, cw, chh, chh / 2); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(credit, cx + cw / 2, cy + chh / 2 + 0.5 * u);
+
+  // Map attribution, bottom-left, squeezed if needed so it never runs into the credit.
+  const attr = BASEMAPS[$("basemap").value].attr + ($("roadNames").value !== "off" ? " · " + ROAD_ATTR : "") + " · MapLibre";
+  ctx.font = `500 ${10 * u}px "Segoe UI", system-ui, sans-serif`;
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  const maxW = cx - 24 * u, ay = cy + chh / 2;
+  ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillText(attr, 11 * u, ay + 1 * u, maxW);
+  ctx.fillStyle = "rgba(255,255,255,.85)"; ctx.fillText(attr, 10 * u, ay, maxW);
+}
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// ------------------------------------------------------------------ stage sizing
+function applySize() {
+  const [W, H] = $("res").value.split("x").map(Number);
+  state.W = W; state.H = H;
+  const stage = $("stage");
+  stage.style.width = W + "px"; stage.style.height = H + "px";
+  out.width = W; out.height = H;
+  fitStage();
+  map.resize();
+  syncLabels();
+  if (state.route && !state.running) map.jumpTo(overviewCam());
+  map.triggerRepaint();
+}
+function fitStage() {
+  const wrap = $("stageWrap"), box = $("stageBox");
+  const sc = Math.min((wrap.clientWidth - 28) / state.W, (wrap.clientHeight - 28) / state.H);
+  box.style.width = state.W * sc + "px"; box.style.height = state.H * sc + "px";
+  $("stage").style.transform = `scale(${sc})`;
+}
+window.addEventListener("resize", fitStage);
+
+// ------------------------------------------------------------------ playback
+const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+function waitIdle(ms) {
+  return new Promise(res => {
+    let done = false;
+    const fin = () => { if (done) return; done = true; clearTimeout(to); map.off("idle", fin); res(); };
+    const to = setTimeout(fin, ms);
+    map.on("idle", fin);
+    map.triggerRepaint();
+  });
+}
+async function hold(sec, onTick) {
+  const start = performance.now();
+  while (!state.abort) {
+    const now = await nextFrame();
+    const t = (now - start) / 1000;
+    onTick?.(t);
+    map.triggerRepaint();
+    if (t >= sec) break;
+  }
+}
+
+async function preloadTiles() {
+  const P = state.profile, n = clamp(Math.ceil(P.total), 15, 90);
+  map.jumpTo(overviewCam());
+  await waitIdle(4000);
+  state.bearing = 0;
+  for (let i = 0; i < n && !state.abort; i++) {
+    const s = sAtTime(P.total * i / (n - 1));
+    state.curS = s; setDone(s);
+    map.jumpTo(followCam(s, 0, true));
+    setStatus(`Loading map tiles ${i + 1}/${n}…`);
+    await waitIdle(2500);
+  }
+}
+
+async function run(record) {
+  if (!state.route || state.running) return;
+  state.running = true; state.abort = false; setButtons();
+  buildProfile();
+  const P = state.profile, intro = $("intro").checked;
+  const T_INTRO = intro ? 1.5 : 0.5, T_FLY = intro ? 4 : 0, T_OUT = intro ? 3.5 : 0, T_END = 2.5;
+  const total = T_INTRO + T_FLY + P.total + T_OUT + T_END;
+  const fmt = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
+  try {
+    if (record && $("preload").checked) await preloadTiles();
+    if (state.abort) return;
+
+    state.curS = 0; state.arrival = null; setDone(0);
+    state.bearing = 0;
+    const start = followCam(0, 0, true);
+    map.jumpTo(intro ? overviewCam() : start);
+    setStatus("Preparing…");
+    await waitIdle(4000);
+    if (state.abort) return;
+
+    if (record) startRecorder();
+    const t0 = performance.now();
+    const tick = () => setStatus(`${record ? "● REC " : "▶ "}${fmt((performance.now() - t0) / 1000)} / ${fmt(total)}`, record);
+
+    await hold(T_INTRO, tick);
+    if (intro && !state.abort) {
+      map.flyTo({ ...start, duration: T_FLY * 1000, curve: 1.3, essential: true });
+      await hold(T_FLY, tick);
+    }
+
+    // Follow the route in real time.
+    const fStart = performance.now();
+    let last = fStart, prevS = -1;
+    while (!state.abort) {
+      const now = await nextFrame();
+      const t = Math.min((now - fStart) / 1000, P.total), dt = (now - last) / 1000;
+      last = now;
+      const s = sAtTime(t);
+      for (const st of activeStops()) if (st.s > prevS && st.s <= s) state.arrival = { name: st.name, t: now };
+      prevS = s; state.curS = s;
+      setDone(s);
+      map.jumpTo(followCam(s, dt, false));
+      tick();
+      if (t >= P.total) break;
+    }
+
+    if (!state.abort) {
+      if (intro) map.flyTo({ ...overviewCam(), duration: T_OUT * 1000, curve: 1.3, essential: true });
+      await hold(T_OUT + T_END, tick);
+    }
+  } finally {
+    map.stop();
+    const recorded = !!state.recorder;
+    if (recorded) await stopRecorder();
+    state.running = false;
+    setButtons();
+    if (!recorded) setStatus(state.abort ? "Stopped" : "Done");
+  }
+}
+
+// ------------------------------------------------------------------ recording
+function pickMime() {
+  const c = ["video/mp4;codecs=avc1.640028", "video/mp4;codecs=avc1", "video/mp4",
+             "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+  return c.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
+}
+function startRecorder() {
+  const fps = +$("fps").value, mime = pickMime();
+  const stream = out.captureStream(fps);
+  const rec = new MediaRecorder(stream, { mimeType: mime || undefined,
+    videoBitsPerSecond: Math.round(state.W * state.H * fps * 0.2) });
+  const chunks = [];
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.done = new Promise(res => rec.onstop = () => res(new Blob(chunks, { type: rec.mimeType || mime || "video/webm" })));
+  rec.start(500);
+  state.recorder = rec;
+}
+// Every recording is kept in the list below the stage (newest first) until the page closes,
+// and saved to Downloads automatically unless that option is off.
+const clips = [];
+async function stopRecorder() {
+  const rec = state.recorder;
+  state.recorder = null;
+  if (rec.state !== "inactive") rec.stop();
+  const blob = await rec.done;
+  const ext = /mp4/.test(blob.type) ? "mp4" : "webm";
+  const d = new Date(), pad = n => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+  const base = ($("title").value.trim() || "route").replace(/[^\w\- ]+/g, "").replace(/\s+/g, "-");
+  const clip = { name: `${base}_${stamp}.${ext}`, url: URL.createObjectURL(blob), saved: false };
+  clips.push(clip);
+
+  const el = document.createElement("div");
+  el.className = "clip";
+  el.innerHTML = `<video controls muted preload="metadata"></video><div><b></b><span></span><a download>⬇ Download</a></div>`;
+  el.querySelector("video").src = clip.url;
+  el.querySelector("b").textContent = clip.name;
+  el.querySelector("b").title = clip.name;
+  el.querySelector("span").textContent = `${(blob.size / 1048576).toFixed(1)} MB · ${state.W}×${state.H}${state.abort ? " · partial" : ""}`;
+  const a = el.querySelector("a");
+  a.href = clip.url; a.download = clip.name;
+  a.onclick = () => { clip.saved = true; el.classList.add("saved"); a.textContent = "✓ Saved — download again"; };
+  $("result").prepend(el);
+  $("result").classList.add("show");
+
+  if ($("autosave").checked) a.click();
+  setStatus(clip.saved ? `Saved ${clip.name} to Downloads` : "Video ready — download it below");
+}
+window.addEventListener("beforeunload", e => {
+  if (state.recorder || clips.some(c => !c.saved)) { e.preventDefault(); e.returnValue = ""; }
+});
+
+// ------------------------------------------------------------------ UI wiring
+function setStatus(t, live = false) { const el = $("status"); el.textContent = t; el.classList.toggle("live", live); }
+function setButtons() {
+  const has = !!state.route, r = state.running;
+  $("playBtn").disabled = !has || r;
+  $("recBtn").disabled = !has || r || !window.MediaRecorder;
+  $("stopBtn").disabled = !r;
+  for (const id of ["res", "fps", "file"]) $(id).disabled = r;
+}
+$("playBtn").onclick = () => run(false);
+$("recBtn").onclick = () => run(true);
+$("stopBtn").onclick = () => { state.abort = true; };
+
+async function handleFile(file) {
+  if (!file || state.running) return;
+  try { loadKml(await readFile(file), file.name); }
+  catch (e) { setStatus("Error: " + e.message); alert(e.message); }
+}
+$("file").onchange = e => handleFile(e.target.files[0]);
+const drop = $("drop");
+["dragenter", "dragover"].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); if (ev === "drop" || e.target === document.documentElement) drop.classList.remove("over"); }));
+document.addEventListener("drop", e => handleFile(e.dataTransfer.files[0]));
+
+const sliders = { duration: v => v + " s", zClose: v => (+v).toFixed(1), zFar: v => (+v).toFixed(1),
+                  slow: v => v + "%", pause: v => v + " s", pitch: v => v + "°" };
+for (const [id, f] of Object.entries(sliders)) {
+  const el = $(id), show = () => { $(id + "V").textContent = f(el.value); };
+  el.addEventListener("input", () => {
+    show();
+    if (id === "pitch" && state.route && !state.running && state.phase === "idle") map.triggerRepaint();
+  });
+  show();
+}
+// Keep displays in sync when loadKml sets zoom values programmatically.
+const syncSliderText = () => { for (const [id, f] of Object.entries(sliders)) $(id + "V").textContent = f($(id).value); };
+
+$("res").onchange = applySize;
+for (const id of ["basemap", "placeLabels", "roadNames", "color"]) $(id).addEventListener("input", syncLabels);
+for (const id of ["title", "labels", "hud"]) $(id).addEventListener("input", () => map.triggerRepaint());
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && state.recorder) setStatus("⚠ Keep this tab visible while recording", true);
+});
+
+map.on("load", async () => {
+  syncLabels();
+  updateRouteSources();
+  // Optional: ?kml=path/to/file.kml auto-loads when the page is served over http(s).
+  const q = new URLSearchParams(location.search).get("kml");
+  if (q) {
+    try { const r = await fetch(q); if (!r.ok) throw new Error(r.status); loadKml(await r.text(), q.split("/").pop()); }
+    catch (e) { setStatus("Could not load " + q); }
+  }
+});
+applySize();
+setButtons();
+if (!window.MediaRecorder) setStatus("This browser cannot record video — use Chrome or Edge");
+</script>
+</body>
+</html>
